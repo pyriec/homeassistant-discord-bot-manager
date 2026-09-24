@@ -26,6 +26,16 @@
           "labels": "Étiquettes à utiliser",
           "_new_label": "Créer une nouvelle étiquette"
         }
+      },
+      "scan_commands": {
+        "title": "Actualiser les commandes",
+        "description": "Recherche des nouvelles automatisations et entités correspondant aux étiquettes sélectionnées.\n\n{{ automation_count }} automatisations et {{ entity_count }} entités trouvées.",
+        "data": {
+          "action": "Action à effectuer"
+        },
+        "data_description": {
+          "action": "Que voulez-vous faire avec les commandes trouvées ?"
+        }
       }
     },
     "error": {
@@ -41,17 +51,17 @@
   },
   "services": {
     "refresh_commands": {
-      "name": "Rafraîchir les commandes",
-      "description": "Re-synchronise l'arbre de commandes Discord.",
+      "name": "Rafraîchir les commandes Discord",
+      "description": "Scanne les nouvelles automatisations et entités, puis met à jour les commandes Discord.",
       "fields": {
         "entry_id": {
           "name": "Entrée de configuration",
-          "description": "ID de l'entrée de configuration à resynchroniser (toutes si omis)."
+          "description": "ID de l'entrée de configuration à rafraîchir (toutes si omis)."
         }
       }
     },
     "reconnect": {
-      "name": "Reconnecter",
+      "name": "Reconnecter le bot",
       "description": "Recharge l'intégration (déconnecte puis reconnecte le bot).",
       "fields": {
         "entry_id": {

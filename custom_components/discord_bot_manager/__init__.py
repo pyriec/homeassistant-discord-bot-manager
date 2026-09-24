@@ -379,7 +379,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Discord Bot Manager from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
+    from . import DOMAIN as DOMAIN_NAME  # Import after module is loaded
+
+    hass.data.setdefault(DOMAIN_NAME, {})
 
     if not str(entry.data.get(CONF_TOKEN, "")).strip():
         _LOGGER.error("Missing Discord bot token for entry %s", entry.title)
@@ -388,7 +390,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_setup_services(hass)
 
     manager = HADiscordBotManager(hass, entry)
-    hass.data[DOMAIN][entry.entry_id] = manager
+    hass.data[DOMAIN_NAME][entry.entry_id] = manager
     await manager.async_start()
 
     # Load the sensor platform for dashboard
