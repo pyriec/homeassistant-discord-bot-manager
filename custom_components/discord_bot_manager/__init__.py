@@ -1,10 +1,7 @@
 """Discord Bot Manager integration for Home Assistant.
 
-Runs one or more persistent Discord bots, exposing:
-
-- Home Assistant automations (matched by HA labels) as Discord slash commands.
-- Configured entity states as slash commands with Jinja2 template rendering.
-- Dashboard sensor showing bot status and configured commands.
+Simplified config: on new instance creation, only server ID and bot token are
+required. All command management happens via services and a custom Lovelace panel.
 """
 
 from __future__ import annotations
@@ -15,24 +12,18 @@ import re
 from typing import Any
 
 import discord
-import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.template import Template
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import (
     COMMAND_NAME_REGEX,
-    CONF_AUTOMATION_LABELS,
-    CONF_BOTS,
     CONF_COMMAND,
+    CONF_COMMANDS,
     CONF_DESCRIPTION,
-    CONF_ENTITIES,
-    CONF_FORMAT,
     CONF_GUILD_ID,
-    CONF_LABELS,
     CONF_TOKEN,
     DOMAIN,
 )
@@ -40,52 +31,13 @@ from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
-
-ENTITY_COMMAND_SCHEMA = vol.Schema(
-    {
-        vol.Required("entity_id"): cv.entity_id,
-        vol.Required(CONF_COMMAND): cv.string,
-        vol.Optional(CONF_DESCRIPTION, default=""): cv.string,
-        vol.Optional(CONF_FORMAT, default="{{ states(entity_id) }}"): cv.string,
-    }
-)
-
-CONFIG_SCHEMA = vol.Schema(
-    {
-        DOMAIN: vol.Schema(
-            {
-                vol.Optional(CONF_BOTS, default=[]): vol.All(
-                    cv.ensure_list,
-                    [
-                        vol.Schema(
-                            {
-                                vol.Required(CONF_TOKEN): cv.string,
-                                vol.Optional(CONF_GUILD_ID): cv.string,
-                                vol.Optional(
-                                    CONF_LABELS, default=[]
-                                ): vol.All(cv.ensure_list, [cv.string]),
-                                vol.Optional(
-                                    CONF_AUTOMATION_LABELS, default=[]
-                                ): vol.All(cv.ensure_list, [cv.string]),
-                                vol.Optional(
-                                    CONF_ENTITIES, default=[]
-                                ): vol.All(cv.ensure_list, [ENTITY_COMMAND_SCHEMA]),
-                            }
-                        )
-                    ],
-                )
-            }
-        ),
-    },
-    extra=vol.ALLOW_EXTRA,
-)
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.DASHBOARD]
 
 REGEX_COMMAND = re.compile(COMMAND_NAME_REGEX)
 
 
 def sanitize_command_name(raw: str) -> str | None:
-    """Clean a Discord slash command name to ``^[a-z0-9_-]{1,32}$``.
+    """Clean a Discord slash command name to ^[a-z0-9_-]{1,32}$.
 
     Returns ``None`` when no valid name can be derived.
     """
@@ -108,22 +60,195 @@ class HADiscordBotManager:
         self.tree: discord.app_commands.CommandTree | None = None
         self._start_task: asyncio.Task | None = None
         self._guild_id: int | None = None
+        self._labels: list[str] = []
 
         guild_id = str(entry.data.get(CONF_GUILD_ID, "") or "").strip()
         if guild_id.isdigit():
             self._guild_id = int(guild_id)
 
+        self._labels = list(entry.data.get("labels", []) or [])
+
+    @property
+    def entry_id(self) -> str:
+        """Return the config entry ID."""
+        return self.entry.entry_id
+
+    def get_config(self) -> dict[str, Any]:
+        """Return full configuration as a serializable dict."""
+        commands = self.get_commands()
+        return {
+            "entry_id": self.entry.entry_id,
+            "bot_name": self.entry.data.get("bot_name", ""),
+            "guild_id": self.entry.data.get("guild_id", ""),
+            "token_masked": self._mask_token(
+                str(self.entry.data.get(CONF_TOKEN, ""))
+            ),
+            "labels": self.get_labels(),
+            "commands": commands,
+            "total_commands": len(commands),
+            "status": self._get_status(),
+            "last_sync": self.entry.data.get("last_sync", ""),
+        }
+
+    @staticmethod
+    def _mask_token(token: str) -> str:
+        """Return masked token (first 10 chars visible, rest hidden)."""
+        if len(token) <= 10:
+            return token + "..."
+        return token[:10] + "..."
+
+    def get_commands(self) -> list[dict[str, Any]]:
+        """Return configured commands list."""
+        return list(self.entry.data.get(CONF_COMMANDS, []) or [])
+
+    def get_labels(self) -> list[str]:
+        """Return configured labels."""
+        return list(self._labels)
+
+    def add_command(self, command: str, description: str = "", format: str = "{{ states(entity_id) }}", entity_id: str | None = None) -> None:
+        """Add a command to the bot's configuration."""
+        sanitized = sanitize_command_name(command)
+        if not sanitized:
+            _LOGGER.warning("Invalid command name: %s", command)
+            return
+
+        commands = self.get_commands()
+        for cmd in commands:
+            if cmd.get("command") == sanitized:
+                _LOGGER.warning("Command %s already exists", sanitized)
+                return
+
+        commands.append({
+            "entity_id": entity_id or "",
+            "command": sanitized,
+            "description": description,
+            "format": format,
+        })
+        self._update_entry_data({CONF_COMMANDS: commands})
+
+    def remove_command(self, command: str) -> None:
+        """Remove a command from the bot's configuration."""
+        sanitized = sanitize_command_name(command)
+        if not sanitized:
+            return
+
+        commands = [c for c in self.get_commands() if c.get("command") != sanitized]
+        self._update_entry_data({CONF_COMMANDS: commands})
+
+    def update_command(self, command: str, description: str = "", format: str = "", entity_id: str | None = None) -> None:
+        """Update an existing command's attributes."""
+        sanitized = sanitize_command_name(command)
+        if not sanitized:
+            return
+
+        commands = self.get_commands()
+        for idx, cmd in enumerate(commands):
+            if cmd.get("command") == sanitized:
+                if description:
+                    commands[idx]["description"] = description
+                if format:
+                    commands[idx]["format"] = format
+                if entity_id:
+                    commands[idx]["entity_id"] = entity_id
+                break
+        self._update_entry_data({CONF_COMMANDS: commands})
+
+    def add_label(self, label: str) -> None:
+        """Add a label to the bot's configuration."""
+        label = label.strip()
+        if not label or label in self._labels:
+            return
+        self._labels.append(label)
+        self._update_entry_data({"labels": list(self._labels)})
+
+    def remove_label(self, label: str) -> None:
+        """Remove a label from the bot's configuration."""
+        label = label.strip()
+        if label in self._labels:
+            self._labels.remove(label)
+            self._update_entry_data({"labels": list(self._labels)})
+
+    def _update_entry_data(self, data: dict[str, Any]) -> None:
+        """Update config entry data and save timestamp."""
+        data = {**self.entry.data, **data}
+        from datetime import datetime
+        data["last_sync"] = datetime.now().isoformat()
+        self.hass.config_entries.async_update_entry(self.entry, data=data)
+
+    def _get_status(self) -> str:
+        """Return current bot status."""
+        if not self.client:
+            return "offline"
+        if self.client.is_ready():
+            return "online"
+        return "connecting"
+
+    async def async_sync_commands(self) -> None:
+        """Sync commands to Discord."""
+        if self.tree is None:
+            return
+
+        commands = self.get_commands()
+        used_names: set[str] = set()
+
+        # Clear existing commands from tree
+        self.tree.clear_commands()
+
+        for cmd_cfg in commands:
+            cmd_name = cmd_cfg.get("command", "")
+            if not cmd_name:
+                continue
+            if cmd_name in used_names:
+                continue
+            used_names.add(cmd_name)
+
+            # Create dynamic callback based on command type
+            entity_id = cmd_cfg.get("entity_id", "")
+            description = cmd_cfg.get("description", f"Commande '{cmd_name}'")
+
+            if entity_id:
+                async def _run_cmd(interaction: discord.Interaction, e_id=entity_id, fmt=cmd_cfg.get("format", "{{ states(entity_id) }}")) -> None:
+                    await self._async_send_entity_state(interaction, e_id, fmt)
+
+                tree_cmd = discord.app_commands.Command(
+                    name=cmd_name,
+                    description=description[:100],
+                    callback=_run_cmd,
+                )
+            else:
+                async def _run_cmd(interaction: discord.Interaction) -> None:
+                    await interaction.response.send_message(
+                        f"Commande `{cmd_name}` exécutée.", ephemeral=True
+                    )
+
+                tree_cmd = discord.app_commands.Command(
+                    name=cmd_name,
+                    description=description[:100],
+                    callback=_run_cmd,
+                )
+
+            self.tree.add_command(tree_cmd)
+
+        # Sync to guild or globally
+        guild = discord.Object(id=self._guild_id) if self._guild_id else None
+        try:
+            if guild:
+                await self.tree.sync(guild=guild)
+                _LOGGER.info("Commands synced to guild %s", self._guild_id)
+            else:
+                await self.tree.sync()
+                _LOGGER.info("Commands synced globally")
+        except discord.HTTPException as err:
+            _LOGGER.error("Failed to sync commands: %s", err)
+
+        # Update last_sync
+        from datetime import datetime
+        self._update_entry_data({"last_sync": datetime.now().isoformat()})
+
     async def async_start(self) -> None:
         """Create the Discord client and start it in the background."""
-        token = str(self.entry.data.get(CONF_TOKEN, "")).strip()
-        automation_labels: list[str] = list(
-            self.entry.data.get(CONF_AUTOMATION_LABELS)
-            or self.entry.data.get(CONF_LABELS)
-            or []
-        )
-        entities: list[dict[str, Any]] = list(
-            self.entry.data.get(CONF_ENTITIES) or []
-        )
+        token = str(self.entry.data.get(CONF_TOKEN, "") or "").strip()
+        commands = self.get_commands()
 
         if not token:
             _LOGGER.error("Discord bot token is required for %s", self.entry.title)
@@ -133,35 +258,15 @@ class HADiscordBotManager:
         manager = self
 
         class _Client(discord.Client):
-            """Discord client wiring automation/entity slash commands."""
+            """Discord client wiring commands."""
 
             def __init__(self) -> None:
                 super().__init__(intents=intents)
                 self.tree = discord.app_commands.CommandTree(self)
 
             async def setup_hook(self) -> None:
-                """Register slash commands and sync the command tree."""
-                await manager.async_register_commands(
-                    self.tree, automation_labels, entities
-                )
-                guild = (
-                    discord.Object(id=manager._guild_id)
-                    if manager._guild_id
-                    else None
-                )
-                try:
-                    if guild is not None:
-                        await self.tree.sync(guild=guild)
-                        _LOGGER.info(
-                            "Slash commands synced to guild %s", manager._guild_id
-                        )
-                    else:
-                        await self.tree.sync()
-                        _LOGGER.info(
-                            "Slash commands synced globally (may take up to 1h)"
-                        )
-                except discord.HTTPException as err:
-                    _LOGGER.error("Failed to sync slash commands: %s", err)
+                """Register slash commands and sync."""
+                await manager.async_sync_commands()
 
             async def on_ready(self) -> None:
                 assert self.user is not None
@@ -173,143 +278,10 @@ class HADiscordBotManager:
         self.client = _Client()
         self.tree = self.client.tree  # type: ignore[attr-defined]
 
-        # Start the Discord gateway loop without blocking Home Assistant.
         self._start_task = self.hass.async_create_background_task(
             self.client.start(token),
             name=f"{DOMAIN}_{self.entry.entry_id}",
         )
-
-    async def async_register_commands(
-        self,
-        tree: discord.app_commands.CommandTree,
-        automation_labels: list[str],
-        entities: list[dict[str, Any]],
-    ) -> None:
-        """Register automation and entity slash commands on the tree."""
-        automation_ids = self._async_get_labeled_automations(automation_labels)
-        used_names: set[str] = set()
-
-        for automation_id in automation_ids:
-            name = sanitize_command_name(automation_id.split(".", 1)[-1])
-            if not name:
-                _LOGGER.warning(
-                    "Skipping automation with invalid id: %s", automation_id
-                )
-                continue
-            if name in used_names:
-                _LOGGER.warning(
-                    "Duplicate slash command name '%s' (automation %s), skipping",
-                    name,
-                    automation_id,
-                )
-                continue
-
-            state = self.hass.states.get(automation_id)
-            friendly = (
-                state.attributes.get("friendly_name", name) if state else name
-            )
-            used_names.add(name)
-
-            def _make_automation_callback(aid: str):
-                async def _run(interaction: discord.Interaction) -> None:
-                    await self._async_trigger_automation(interaction, aid)
-
-                return _run
-
-            tree.add_command(
-                discord.app_commands.Command(
-                    name=name,
-                    description=f"Déclenche l'automatisation « {friendly} »"[:100],
-                    callback=_make_automation_callback(automation_id),
-                )
-            )
-
-        for entity_cfg in entities:
-            entity_id = entity_cfg.get("entity_id", "")
-            name = sanitize_command_name(entity_cfg.get(CONF_COMMAND, ""))
-            if not name:
-                _LOGGER.warning(
-                    "Skipping entity command with invalid name: %s (%s)",
-                    entity_cfg.get(CONF_COMMAND),
-                    entity_id,
-                )
-                continue
-            if name in used_names:
-                _LOGGER.warning("Duplicate slash command name '%s', skipping", name)
-                continue
-            used_names.add(name)
-
-            def _make_entity_callback(eid: str, fmt: str):
-                async def _run(interaction: discord.Interaction) -> None:
-                    await self._async_send_entity_state(interaction, eid, fmt)
-
-                return _run
-
-            tree.add_command(
-                discord.app_commands.Command(
-                    name=name,
-                    description=(
-                        entity_cfg.get(CONF_DESCRIPTION)
-                        or f"Affiche l'état de {entity_id}"
-                    )[:100],
-                    callback=_make_entity_callback(
-                        entity_id,
-                        entity_cfg.get(CONF_FORMAT, "{{ states(entity_id) }}"),
-                    ),
-                )
-            )
-
-        _LOGGER.info(
-            "Registered %d automation and %d entity slash commands",
-            len(automation_ids),
-            len(entities),
-        )
-
-    def _async_get_labeled_automations(self, labels: list[str]) -> list[str]:
-        """Return automation entity ids carrying any of the given HA labels."""
-        entity_registry = er.async_get(self.hass)
-        wanted = set(labels)
-        automation_ids: set[str] = set()
-
-        for entity_entry in entity_registry.entities.values():
-            if entity_entry.domain != "automation":
-                continue
-            if wanted & set(entity_entry.labels):
-                automation_ids.add(entity_entry.entity_id)
-
-        return sorted(automation_ids)
-
-    async def _async_trigger_automation(
-        self, interaction: discord.Interaction, automation_id: str
-    ) -> None:
-        """Trigger a Home Assistant automation from a slash command."""
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-
-        state = self.hass.states.get(automation_id)
-        if state is None:
-            await interaction.followup.send(
-                f"❌ Automatisation `{automation_id}` introuvable.",
-                ephemeral=True,
-            )
-            return
-
-        try:
-            await self.hass.services.async_call(
-                "automation",
-                "trigger",
-                {"entity_id": automation_id},
-                blocking=True,
-            )
-            await interaction.followup.send(
-                f"✅ Automatisation `{automation_id}` déclenchée."
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.exception("Failed to trigger automation %s", automation_id)
-            await interaction.followup.send(
-                f"❌ Erreur lors du déclenchement de `{automation_id}` : {err}",
-                ephemeral=True,
-            )
 
     async def _async_send_entity_state(
         self,
@@ -328,16 +300,15 @@ class HADiscordBotManager:
             )
             return
 
+        from homeassistant.helpers.template import Template
         try:
             tpl = Template(format_str, self.hass)
-            rendered = tpl.async_render(
-                {
-                    "state": state.state,
-                    "attributes": dict(state.attributes),
-                    "entity_id": entity_id,
-                    "entity": state,
-                }
-            )
+            rendered = tpl.async_render({
+                "state": state.state,
+                "attributes": dict(state.attributes),
+                "entity_id": entity_id,
+                "entity": state,
+            })
             await interaction.followup.send(str(rendered)[:2000])
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception("Template rendering failed for %s", entity_id)
@@ -363,25 +334,12 @@ class HADiscordBotManager:
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up Discord Bot Manager from YAML configuration."""
     hass.data.setdefault(DOMAIN, {})
-
-    for bot_config in config.get(DOMAIN, {}).get(CONF_BOTS, []):
-        # YAML bots are imported into the config flow (one entry per bot).
-        hass.async_create_task(
-            hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": "import"},
-                data=bot_config,
-            )
-        )
-
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Discord Bot Manager from a config entry."""
-    from . import DOMAIN as DOMAIN_NAME  # Import after module is loaded
-
-    hass.data.setdefault(DOMAIN_NAME, {})
+    hass.data.setdefault(DOMAIN, {})
 
     if not str(entry.data.get(CONF_TOKEN, "")).strip():
         _LOGGER.error("Missing Discord bot token for entry %s", entry.title)
@@ -390,11 +348,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_setup_services(hass)
 
     manager = HADiscordBotManager(hass, entry)
-    hass.data[DOMAIN_NAME][entry.entry_id] = manager
-    await manager.async_start()
+    hass.data[DOMAIN][entry.entry_id] = manager
 
-    # Load the sensor platform for dashboard
-    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
+    try:
+        await manager.async_start()
+    except discord.PrivilegedIntentsRequired:
+        raise ConfigEntryNotReady("Discord privileged intents required")
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Failed to connect bot: %s", err)
+        raise ConfigEntryNotReady(f"Failed to connect: {err}")
+
+    # Forward to sensor and dashboard platforms
+    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR, Platform.DASHBOARD])
 
     return True
 
@@ -406,8 +371,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     if manager:
         await manager.async_stop()
-    
-    # Unload sensor platform
-    await hass.config_entries.async_forward_entry_unload(entry, Platform.SENSOR)
-    
-    return True
+
+    # Unload platforms
+    unload_ok = await hass.config_entries.async_forward_entry_unload(entry, Platform.SENSOR)
+    unload_ok &= await hass.config_entries.async_forward_entry_unload(entry, Platform.DASHBOARD)
+
+    return unload_ok

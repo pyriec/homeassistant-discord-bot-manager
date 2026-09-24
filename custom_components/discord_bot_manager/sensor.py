@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class DiscordBotManagerSensor(SensorEntity):
-    """Dashboard sensor showing bot status and configured commands."""
+    """Status sensor for a Discord bot."""
 
     _attr_should_poll = False
     _attr_has_entity_name = True
@@ -33,9 +33,9 @@ class DiscordBotManagerSensor(SensorEntity):
         self._attr_extra_state_attributes: dict[str, Any] = {
             "connection": "offline",
             "guild_id": entry.data.get("guild_id", ""),
-            "labels": entry.data.get("labels", []),
-            "automation_commands": [],
-            "entity_commands": [],
+            "bot_name": entry.data.get("bot_name", ""),
+            "commands": [],
+            "labels": [],
             "total_commands": 0,
             "last_updated": "",
         }
@@ -60,7 +60,6 @@ class DiscordBotManagerSensor(SensorEntity):
         """Update the sensor state."""
         from datetime import datetime
 
-        # Bot connection status
         if not self._manager or not self._manager.client:
             self._attr_native_value = "offline"
             self._attr_icon = "mdi:discord-horizontal"
@@ -70,44 +69,21 @@ class DiscordBotManagerSensor(SensorEntity):
             self._attr_icon = "mdi:discord"
             self._attr_extra_state_attributes["connection"] = "online"
             if self._manager.client.user:
-                self._attr_extra_state_attributes["bot_name"] = str(self._manager.client.user)
+                self._attr_extra_state_attributes["bot_name"] = str(
+                    self._manager.client.user
+                )
         else:
             self._attr_native_value = "connecting"
             self._attr_icon = "mdi:discord"
             self._attr_extra_state_attributes["connection"] = "connecting"
 
-        # Get automation commands from labels
-        automation_commands = []
-        if hasattr(self._manager, '_async_get_labeled_automations'):
-            labels = self._entry.data.get("automation_labels") or self._entry.data.get("labels", [])
-            automation_ids = self._manager._async_get_labeled_automations(labels)
-            for aid in automation_ids:
-                state = self._hass.states.get(aid)
-                friendly = (
-                    state.attributes.get("friendly_name", aid)
-                    if state
-                    else aid
-                )
-                automation_commands.append({
-                    "entity_id": aid,
-                    "command": aid.split(".", 1)[-1],
-                    "friendly_name": friendly,
-                })
-        self._attr_extra_state_attributes["automation_commands"] = automation_commands
+        commands = self._manager.get_commands()
+        self._attr_extra_state_attributes["commands"] = commands
+        self._attr_extra_state_attributes["total_commands"] = len(commands)
 
-        # Get entity commands
-        entity_commands = []
-        for cfg in self._entry.data.get("entities", []):
-            entity_commands.append({
-                "entity_id": cfg.get("entity_id", ""),
-                "command": cfg.get("command", ""),
-                "description": cfg.get("description", ""),
-            })
-        self._attr_extra_state_attributes["entity_commands"] = entity_commands
+        labels = self._manager.get_labels()
+        self._attr_extra_state_attributes["labels"] = labels
 
-        # Total commands
-        total = len(automation_commands) + len(entity_commands)
-        self._attr_extra_state_attributes["total_commands"] = total
         self._attr_extra_state_attributes["last_updated"] = datetime.now().isoformat()
 
         self.async_write_ha_state()

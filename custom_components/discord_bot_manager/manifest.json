@@ -1,14 +1,11 @@
 {
   "domain": "discord_bot_manager",
   "name": "Discord Bot Manager",
-  "documentation": "https://github.com/pyriec/homeassistant-discord-bot-manager",
-  "requirements": [
-    "discord.py>=2.3.0"
-  ],
-  "codeowners": [
-    "@deneuville"
-  ],
-  "version": "1.3.0",
+  "documentation": "https://git.home-deneuville.fr/Edern/homeassistant-discord-bot-manager",
+  "requirements": ["discord.py>=2.3.0"],
+  "codeowners": ["@deneuville"],
+  "version": "2.0.0",
   "iot_class": "local_push",
-  "config_flow": true
+  "config_flow": true,
+  "documentation": "https://git.home-deneuville.fr/Edern/homeassistant-discord-bot-manager"
 }

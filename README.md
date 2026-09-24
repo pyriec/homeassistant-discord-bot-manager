@@ -1,6 +1,6 @@
 # Discord Bot Manager
 
-Un custom component Home Assistant pour gérer un ou plusieurs bots Discord persistants, exposant vos automatisations et entités en commandes slash Discord.
+Un custom component Home Assistant pour gérer un ou plusieurs bots Discord persistants, exposant vos commandes en commandes slash Discord. Configuration simplifiée : seulement l'ID du serveur et le token du bot sont requis.
 
 [![Discord](https://img.shields.io/discord/732296796488822815?color=%235865F2&label=Discord&logo=discord&logoColor=white)](https://discord.gg/NzdCbuT3)
 [![HACS Default](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/integration)
@@ -9,11 +9,12 @@ Un custom component Home Assistant pour gérer un ou plusieurs bots Discord pers
 
 ## Fonctionnalités
 
-- **Connexion WebSocket Discord** : Le bot se connecte en arrière-plan sans bloquer Home Assistant
-- **Commandes Slash dynamiques** : Récupère automatiquement les automatisations associées à des labels HA
-- **Entités et templates Jinja2** : Configurez des commandes pour lire l'état d'entités avec rendu template personnalisé
-- **Support YAML et UI** : Configuration via `configuration.yaml` ou interface utilisateur (config flow)
-- **Synchronisation guild** : Option `guild_id` pour synchroniser instantanément les commandes sur un serveur Discord
+- **Configuration simplifiée** : Seulement l'ID du serveur Discord et le token du bot sont requis
+- **Commandes Slash dynamiques** : Créez, modifiez et supprimez des commandes depuis le panneau Lovelace
+- **Gestion des étiquettes HA** : Créez et gérez les étiquettes Home Assistant directement
+- **Template Jinja2** : Personnalisez le rendu des réponses avec des templates
+- **Interface Lovelace complète** : Visualisez tous vos bots et leurs configurations
+- **Support multi-bots** : Gérez plusieurs bots Discord simultanément
 
 ## Installation
 
@@ -26,14 +27,6 @@ Un custom component Home Assistant pour gérer un ou plusieurs bots Discord pers
    ```
 3. Recherchez **Discord Bot Manager** dans HACS et cliquez sur **Installer**
 4. Redémarrez Home Assistant
-
-Ou utilisez le bouton ci-dessous pour ouvrir ce dépôt directement dans HACS depuis votre instance Home Assistant :
-
-<p align="center">
-  <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=pyriec&repository=homeassistant-discord-bot-manager&category=integration">
-    <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open this repository in HACS">
-  </a>
-</p>
 
 ### Manuellement
 
@@ -49,85 +42,87 @@ Ou utilisez le bouton ci-dessous pour ouvrir ce dépôt directement dans HACS de
 2. Cliquez sur **Ajouter une intégration**
 3. Recherchez **Discord Bot Manager**
 4. Saisissez :
+   - **Nom du bot** (optionnel) : nom affiché dans HA
    - **Token** : votre token bot Discord (à récupérer sur [Discord Developer Portal](https://discord.com/developers/applications))
    - **Guild ID** (optionnel) : ID du serveur Discord pour synchronisation instantanée des commandes
-   - **Labels** : étiquettes HA séparées par des virgules, associées aux automatisations à exposer
 
 ### Via YAML
-
-Ajoutez à votre `configuration.yaml` :
 
 ```yaml
 discord_bot_manager:
   bots:
     - token: !secret discord_token
-      guild_id: "123456789012345678"  # Optionnel : sync instantanée sur ce serveur
-      labels:
-        - "discord_acces"
-      entities:
-        - entity_id: sensor.temperature_salon
-          command: "temperature"
-          description: "Affiche la température du salon"
-          format: "🌡️ Il fait actuellement **{{ states('sensor.temperature_salon') }}°C** dans le salon."
-        - entity_id: binary_sensor.porte_entree
-          command: "porte"
-          description: "État de la porte d'entrée"
-          format: "🚪 La porte est {{ 'ouverte' if is_state('binary_sensor.porte_entree', 'on') else 'fermée' }}."
+      guild_id: "123456789012345678"
 ```
+
+## Panneau Lovelace
+
+Ajoutez le card custom à votre dashboard :
+
+```yaml
+type: custom:discord-bot-manager-card
+title: Discord Bot Manager
+```
+
+Le panneau affiche :
+- **Liste des bots** configurés avec leur statut (online/offline/connecting)
+- **Statistiques** : nombre de commandes, étiquettes
+- **Gestion des commandes** :
+  - ➕ Ajouter une nouvelle commande
+  - ✏️ Modifier une commande existante (description, format)
+  - 🗑️ Supprimer une commande
+  - 🔄 Synchroniser les commandes avec Discord
+- **Gestion des étiquettes** :
+  - 🏷️ Ajouter une étiquette
+  - Supprimer une étiquette
 
 ## Commandes Slash
 
-### Commandes d'automatisation
-
-Les automatisations HA portant les labels configurés sont automatiquement exposées comme commandes slash :
+Les commandes créées via le panneau Lovelace deviennent des commandes slash Discord :
 
 ```
-/trigger_entrée        → Déclenche l'automatisation "Entrée"
-/trigger_arret_alarme  → Déclenche l'automatisation "Arrêt alarme"
+/commande    → Réponse avec le template défini
 ```
 
-### Commandes d'entités
-
-Chaque entité configurée devient une commande slash avec rendu template Jinja2 :
-
-```
-/temperature
-→ 🌡️ Il fait actuellement **22°C** dans le salon.
-
-/porte
-→ 🚪 La porte est fermée.
-```
-
-Variables disponibles dans le template :
+Variables disponibles dans le template Jinja2 :
 
 | Variable | Description |
-|---|---|
+|----------|-------------|
 | `{{ state }}` | Valeur brute de l'entité |
 | `{{ attributes }}` | Dictionnaire des attributs |
 | `{{ entity_id }}` | ID complet de l'entité |
 | `{{ entity }}` | L'objet `State` complet |
 
-## Secrets
-
-Créez un fichier `secrets.yaml` dans le répertoire de configuration :
-
-```yaml
-discord_token: "DISCORD_BOT_TOKEN_HERE"
-```
-
 ## Services
 
 | Service | Description |
-|---|---|
-| `discord_bot_manager.refresh_commands` | Re-synchronise l'arbre de commandes Discord (sync guild immédiate) |
-| `discord_bot_manager.reconnect` | Recharge l'intégration (déconnecte puis reconnecte le bot) |
+|---------|-------------|
+| `discord_bot_manager.get_config` | Retourne la configuration complète d'un bot |
+| `discord_bot_manager.add_command` | Ajoute une nouvelle commande |
+| `discord_bot_manager.update_command` | Modifie une commande existante |
+| `discord_bot_manager.remove_command` | Supprime une commande |
+| `discord_bot_manager.add_label` | Ajoute une étiquette au bot |
+| `discord_bot_manager.remove_label` | Supprime une étiquette du bot |
+| `discord_bot_manager.create_label` | Crée une nouvelle étiquette HA |
+| `discord_bot_manager.refresh_commands` | Resynchronise l'arbre de commandes Discord |
+| `discord_bot_manager.reconnect` | Recharge l'intégration (déconnecte puis reconnecte) |
 
 Exemple d'appel :
-
 ```yaml
-service: discord_bot_manager.refresh_commands
+service: discord_bot_manager.add_command
 data:
-  entry_id: abcd1234efgh5678
+  entry_id: abc123
+  command: temperature
+  description: "Affiche la température"
+  format: "🌡️ Il fait {{ states('sensor.temperature') }}°C"
+```
+
+## Secrets
+
+Optionnel pour configuration YAML :
+```yaml
+# secrets.yaml
+discord_token: "DISCORD_BOT_TOKEN_HERE"
 ```
 
 ## Développement

@@ -10,31 +10,16 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import label_registry as lr
 
 from .const import (
-    CONF_AUTOMATION_LABELS,
-    CONF_COMMAND,
-    CONF_DESCRIPTION,
-    CONF_ENTITIES,
-    CONF_FORMAT,
+    CONF_BOT_NAME,
+    CONF_COMMANDS,
     CONF_GUILD_ID,
-    CONF_LABELS,
     CONF_TOKEN,
     DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _sanitize_labels(raw: str) -> list[str]:
-    """Parse comma-separated labels string into list."""
-    return [
-        label.strip()
-        for label in raw.split(",")
-        if label.strip()
-    ]
 
 
 class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -46,7 +31,8 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Validate user input and return an error dict."""
         errors: dict[str, str] = {}
 
-        if not str(user_input.get(CONF_TOKEN, "") or "").strip():
+        token = str(user_input.get(CONF_TOKEN, "") or "").strip()
+        if not token:
             errors[CONF_TOKEN] = "missing_token"
 
         guild_id = str(user_input.get(CONF_GUILD_ID, "") or "").strip()
@@ -55,75 +41,10 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return errors
 
-    async def _async_get_available_labels(self) -> list[str]:
-        """Return list of existing Home Assistant labels."""
-        try:
-            registry = lr.async_get(self.hass)
-            return sorted(registry.labels.keys())
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("Could not fetch label registry", exc_info=True)
-            return []
-
-    async def _async_create_label(self, label_name: str) -> bool:
-        """Create a new HA label."""
-        try:
-            registry = lr.async_get(self.hass)
-            registry.async_create_label(label_name)
-            return True
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Failed to create label '%s': %s", label_name, err)
-            return False
-
-    async def _async_scan_commands(self, labels: list[str]) -> dict[str, Any]:
-        """Scan for automation and entity commands based on labels."""
-        entity_registry = er.async_get(self.hass)
-        
-        # Find automations
-        automation_commands = []
-        for entity_entry in entity_registry.entities.values():
-            if entity_entry.domain == "automation":
-                entity_labels = set(entity_entry.labels)
-                if any(label in entity_labels for label in labels):
-                    state = self.hass.states.get(entity_entry.entity_id)
-                    friendly_name = (
-                        state.attributes.get("friendly_name", entity_entry.entity_id)
-                        if state
-                        else entity_entry.entity_id
-                    )
-                    automation_commands.append({
-                        "entity_id": entity_entry.entity_id,
-                        "command": entity_entry.entity_id.split(".", 1)[-1],
-                        "description": f"Déclenche '{friendly_name}'",
-                        "format": f"✅ Automatisation `{entity_entry.entity_id}` déclenchée.",
-                        "type": "automation",
-                    })
-
-        # Find entities with matching labels (for entity commands)
-        entity_commands = []
-        for entity_entry in entity_registry.entities.values():
-            if entity_entry.domain != "automation":
-                entity_labels = set(entity_entry.labels)
-                if any(label in entity_labels for label in labels):
-                    entity_commands.append({
-                        "entity_id": entity_entry.entity_id,
-                        "command": entity_entry.entity_id.split(".", 1)[-1],
-                        "description": f"Affiche l'état de {entity_entry.name or entity_entry.entity_id}",
-                        "format": "{{ states(entity_id) }}",
-                        "type": "entity",
-                    })
-
-        return {
-            "automation_commands": automation_commands,
-            "entity_commands": entity_commands,
-            "automation_count": len(automation_commands),
-            "entity_count": len(entity_commands),
-            "total_count": len(automation_commands) + len(entity_commands),
-        }
-
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial UI step (token / guild / labels)."""
+        """Handle the initial UI step — just ask for server ID and bot token."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -132,33 +53,26 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not errors:
                 token = str(user_input[CONF_TOKEN]).strip()
                 guild_id = str(user_input.get(CONF_GUILD_ID, "") or "").strip()
-                labels_raw = str(user_input.get(CONF_LABELS, "") or "")
-                labels = _sanitize_labels(labels_raw)
-                new_label = str(user_input.get("_new_label", "") or "").strip()
+                bot_name = str(user_input.get(CONF_BOT_NAME, "") or "").strip()
 
-                # Create new label if provided
-                if new_label:
-                    await self._async_create_label(new_label)
-                    if new_label not in labels:
-                        labels.append(new_label)
+                await self.async_set_unique_id(token)
+                self._abort_if_unique_id_configured()
 
-                # Store for scan step
-                self._scan_token = token
-                self._scan_guild_id = guild_id
-                self._scan_labels = labels
-                
-                # Show scan results step
-                return await self.async_step_scan_commands()
-
-        # Fetch available labels for the dropdown
-        available_labels = await self._async_get_available_labels()
+                return self.async_create_entry(
+                    title=bot_name or "Discord Bot",
+                    data={
+                        CONF_TOKEN: token,
+                        CONF_GUILD_ID: guild_id,
+                        CONF_BOT_NAME: bot_name,
+                        CONF_COMMANDS: [],
+                    },
+                )
 
         schema = vol.Schema(
             {
+                vol.Required(CONF_BOT_NAME, default=""): str,
                 vol.Required(CONF_TOKEN): str,
                 vol.Optional(CONF_GUILD_ID, default=""): cv.string,
-                vol.Optional(CONF_LABELS, default=""): cv.string,
-                vol.Optional("_new_label", default=""): str,
             }
         )
 
@@ -166,150 +80,11 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=schema,
             errors=errors,
-            description_placeholders={
-                "available_labels": ", ".join(available_labels) or "Aucune étiquette configurée",
-                "help_url": "https://git.home-deneuville.fr/Edern/homeassistant-discord-bot-manager",
-            },
-        )
-
-    async def async_step_scan_commands(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle the scan commands step."""
-        labels = getattr(self, '_scan_labels', [])
-        
-        if not labels:
-            return self.async_abort(reason="no_labels")
-
-        # Scan for commands
-        scan_results = await self._async_scan_commands(labels)
-
-        if user_input is not None:
-            action = user_input.get("action")
-            
-            if action == "create":
-                # Create entry with discovered commands
-                token = getattr(self, '_scan_token', '')
-                guild_id = getattr(self, '_scan_guild_id', '')
-                
-                all_commands = scan_results["automation_commands"] + scan_results["entity_commands"]
-                
-                await self.async_set_unique_id(token)
-                self._abort_if_unique_id_configured()
-                
-                return self.async_create_entry(
-                    title="Discord Bot Manager",
-                    data={
-                        CONF_TOKEN: token,
-                        CONF_GUILD_ID: guild_id,
-                        CONF_LABELS: labels,
-                        CONF_AUTOMATION_LABELS: labels,
-                        CONF_ENTITIES: all_commands,
-                    },
-                )
-            elif action == "abort":
-                return self.async_abort(reason="user_abort")
-
-        # Prepare preview
-        preview_lines = []
-        for cmd in scan_results["automation_commands"][:5]:
-            preview_lines.append(f"- {cmd['command']}: {cmd['description']}")
-        for cmd in scan_results["entity_commands"][:5]:
-            preview_lines.append(f"- {cmd['command']}: {cmd['description']}")
-        preview = "\n".join(preview_lines) or "Aucune commande trouvée"
-
-        schema = vol.Schema(
-            {
-                vol.Required("action"): vol.In(["create", "abort"]),
-            }
-        )
-
-        return self.async_show_form(
-            step_id="scan_commands",
-            data_schema=schema,
-            description_placeholders={
-                "automation_count": scan_results["automation_count"],
-                "entity_count": scan_results["entity_count"],
-                "total_count": scan_results["total_count"],
-                "commands_preview": preview,
-            },
-        )
-
-    async def async_step_reconfigure(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle reconfiguration of an existing bot."""
-        entry: ConfigEntry = self._get_reconfigure_entry()
-        errors: dict[str, str] = {}
-
-        current_token = str(entry.data.get(CONF_TOKEN, "") or "")
-        current_guild_id = str(entry.data.get(CONF_GUILD_ID, "") or "")
-        current_labels = entry.data.get(CONF_LABELS, [])
-
-        if user_input is not None:
-            errors = self._validate(user_input)
-
-            if not errors:
-                token = str(user_input[CONF_TOKEN]).strip()
-                guild_id = str(user_input.get(CONF_GUILD_ID, "") or "").strip()
-                labels_raw = str(user_input.get(CONF_LABELS, "") or "")
-                labels = _sanitize_labels(labels_raw)
-                new_label = str(user_input.get("_new_label", "") or "").strip()
-
-                # Create new label if provided
-                if new_label:
-                    await self._async_create_label(new_label)
-                    if new_label not in labels:
-                        labels.append(new_label)
-
-                # Re-scan commands based on updated labels
-                scan_results = await self._async_scan_commands(labels)
-                all_commands = scan_results["automation_commands"] + scan_results["entity_commands"]
-
-                # Update entry data
-                updated_data = {
-                    **entry.data,
-                    CONF_TOKEN: token,
-                    CONF_GUILD_ID: guild_id,
-                    CONF_LABELS: labels,
-                    CONF_AUTOMATION_LABELS: labels,
-                    CONF_ENTITIES: all_commands,
-                }
-
-                self.hass.config_entries.async_update_entry(
-                    entry,
-                    data=updated_data,
-                )
-
-                # Restart the bot with new configuration
-                await self.hass.config_entries.async_reload(entry.entry_id)
-
-                return self.async_abort(reason="reconfigured")
-
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_TOKEN, default=current_token): str,
-                vol.Optional(CONF_GUILD_ID, default=current_guild_id): cv.string,
-                vol.Optional(CONF_LABELS, default=", ".join(current_labels)): cv.string,
-                vol.Optional("_new_label", default=""): str,
-            }
-        )
-
-        available_labels = await self._async_get_available_labels()
-
-        return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders={
-                "available_labels": ", ".join(available_labels) or "Aucune étiquette configurée",
-            },
         )
 
     async def async_step_import(self, import_config: dict[str, Any]) -> FlowResult:
         """Handle import from configuration.yaml."""
         token = str(import_config.get(CONF_TOKEN, "") or "").strip()
-
         if not token:
             _LOGGER.warning("Skipping Discord bot entry without token")
             return self.async_abort(reason="missing_token")
@@ -317,21 +92,12 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(token)
         self._abort_if_unique_id_configured()
 
-        labels = list(import_config.get(CONF_LABELS, []) or [])
-        
-        # Auto-scan for commands
-        scan_results = await self._async_scan_commands(labels)
-        all_commands = scan_results["automation_commands"] + scan_results["entity_commands"]
-
         return self.async_create_entry(
             title="Discord Bot (YAML)",
             data={
                 CONF_TOKEN: token,
-                CONF_GUILD_ID: str(
-                    import_config.get(CONF_GUILD_ID, "") or ""
-                ).strip(),
-                CONF_LABELS: labels,
-                CONF_AUTOMATION_LABELS: labels,
-                CONF_ENTITIES: all_commands,
+                CONF_GUILD_ID: str(import_config.get(CONF_GUILD_ID, "") or "").strip(),
+                CONF_BOT_NAME: "",
+                CONF_COMMANDS: import_config.get("entities", []),
             },
         )

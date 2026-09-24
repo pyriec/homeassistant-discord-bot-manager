@@ -3,38 +3,16 @@
     "step": {
       "user": {
         "title": "Discord Bot Manager",
-        "description": "Connecte un bot Discord à Home Assistant.\n\nLes automatisations portant les étiquettes sélectionnées seront exposées en commandes slash sur Discord.\n\nConsultez la [documentation](https://git.home-deneuville.fr/Edern/homeassistant-discord-bot-manager) pour plus d'informations.",
+        "description": "Ajoutez un bot Discord à Home Assistant.\n\nFournissez simplement l'ID du serveur et le token du bot. Toutes les commandes seront gérées via le panneau Lovelace.",
         "data": {
+          "bot_name": "Nom du bot (optionnel)",
           "token": "Token du bot Discord",
-          "guild_id": "ID du serveur Discord (optionnel)",
-          "labels": "Étiquettes à utiliser",
-          "_new_label": "Créer une nouvelle étiquette"
+          "guild_id": "ID du serveur Discord"
         },
         "data_description": {
+          "bot_name": "Nom affiché pour ce bot dans Home Assistant",
           "token": "Token obtenu sur https://discord.com/developers/applications",
-          "guild_id": "ID numérique du serveur pour synchronisation instantanée des commandes slash",
-          "labels": "Étiquettes HA existantes (séparées par des virgules) : {{ available_labels }}",
-          "_new_label": "Nom de la nouvelle étiquette à créer dans Home Assistant"
-        }
-      },
-      "reconfigure": {
-        "title": "Modifier le bot Discord",
-        "description": "Modifiez la configuration du bot. Les changements rechargeront automatiquement le bot.",
-        "data": {
-          "token": "Token du bot Discord",
-          "guild_id": "ID du serveur Discord",
-          "labels": "Étiquettes à utiliser",
-          "_new_label": "Créer une nouvelle étiquette"
-        }
-      },
-      "scan_commands": {
-        "title": "Actualiser les commandes",
-        "description": "Recherche des nouvelles automatisations et entités correspondant aux étiquettes sélectionnées.\n\n{{ automation_count }} automatisations et {{ entity_count }} entités trouvées.",
-        "data": {
-          "action": "Action à effectuer"
-        },
-        "data_description": {
-          "action": "Que voulez-vous faire avec les commandes trouvées ?"
+          "guild_id": "ID numérique du serveur pour synchronisation instantanée des commandes"
         }
       }
     },
@@ -44,30 +22,79 @@
       "already_configured": "Ce bot est déjà configuré"
     },
     "abort": {
-      "already_configured": "Ce bot est déjà configuré",
-      "missing_token": "Token manquant",
-      "reconfigured": "Configuration mise à jour avec succès. Le bot a été rechargé."
+      "already_configured": "Ce bot est déjà configuré"
     }
   },
   "services": {
-    "refresh_commands": {
-      "name": "Rafraîchir les commandes Discord",
-      "description": "Scanne les nouvelles automatisations et entités, puis met à jour les commandes Discord.",
+    "get_config": {
+      "name": "Obtenir la configuration",
+      "description": "Retourne la configuration complète du bot spécifiée."
+    },
+    "update_command": {
+      "name": "Modifier une commande",
+      "description": "Met à jour la description ou le format d'une commande existante.",
       "fields": {
-        "entry_id": {
-          "name": "Entrée de configuration",
-          "description": "ID de l'entrée de configuration à rafraîchir (toutes si omis)."
-        }
+        "entry_id": {"name": "ID de l'entrée", "description": "ID de l'entrée de configuration du bot"},
+        "command": {"name": "Commande", "description": "Nom de la commande à modifier"},
+        "description": {"name": "Description", "description": "Nouvelle description de la commande"},
+        "format": {"name": "Format", "description": "Nouveau template Jinja2"},
+        "entity_id": {"name": "Entité", "description": "ID de l'entité HA associée"}
+      }
+    },
+    "add_command": {
+      "name": "Ajouter une commande",
+      "description": "Ajoute une nouvelle commande slash au bot.",
+      "fields": {
+        "entry_id": {"name": "ID de l'entrée", "description": "ID de l'entrée de configuration du bot"},
+        "command": {"name": "Commande", "description": "Nom de la nouvelle commande"},
+        "description": {"name": "Description", "description": "Description de la commande"},
+        "format": {"name": "Format", "description": "Template Jinja2 pour le formatage"},
+        "entity_id": {"name": "Entité", "description": "ID de l'entité HA associée (optionnel)"}
+      }
+    },
+    "remove_command": {
+      "name": "Supprimer une commande",
+      "description": "Supprime une commande du bot.",
+      "fields": {
+        "entry_id": {"name": "ID de l'entrée", "description": "ID de l'entrée de configuration du bot"},
+        "command": {"name": "Commande", "description": "Nom de la commande à supprimer"}
+      }
+    },
+    "add_label": {
+      "name": "Ajouter une étiquette",
+      "description": "Ajoute une étiquette HA au bot.",
+      "fields": {
+        "entry_id": {"name": "ID de l'entrée", "description": "ID de l'entrée de configuration du bot"},
+        "label": {"name": "Étiquette", "description": "Nom de l'étiquette à ajouter"}
+      }
+    },
+    "remove_label": {
+      "name": "Supprimer une étiquette",
+      "description": "Supprime une étiquette du bot.",
+      "fields": {
+        "entry_id": {"name": "ID de l'entrée", "description": "ID de l'entrée de configuration du bot"},
+        "label": {"name": "Étiquette", "description": "Nom de l'étiquette à supprimer"}
+      }
+    },
+    "create_label": {
+      "name": "Créer une étiquette",
+      "description": "Crée une nouvelle étiquette dans Home Assistant.",
+      "fields": {
+        "label": {"name": "Étiquette", "description": "Nom de la nouvelle étiquette"}
+      }
+    },
+    "refresh_commands": {
+      "name": "Rafraîchir les commandes",
+      "description": "Resynchronise l'arbre de commandes Discord avec la configuration actuelle.",
+      "fields": {
+        "entry_id": {"name": "ID de l'entrée", "description": "ID de l'entrée de configuration à rafraîchir (toutes si omis)"}
       }
     },
     "reconnect": {
-      "name": "Reconnecter le bot",
+      "name": "Reconnecter",
       "description": "Recharge l'intégration (déconnecte puis reconnecte le bot).",
       "fields": {
-        "entry_id": {
-          "name": "Entrée de configuration",
-          "description": "ID de l'entrée de configuration à recharger (toutes si omis)."
-        }
+        "entry_id": {"name": "ID de l'entrée", "description": "ID de l'entrée de configuration à recharger (toutes si omis)"}
       }
     }
   }
