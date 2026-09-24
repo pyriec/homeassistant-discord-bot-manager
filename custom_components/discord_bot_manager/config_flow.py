@@ -74,31 +74,51 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.warning("Failed to create label '%s': %s", label_name, err)
             return False
 
-    async def _async_get_automation_commands(self, labels: list[str]) -> list[dict[str, str]]:
-        """Get automation commands from labels."""
-        try:
-            entity_registry = er.async_get(self.hass)
-            commands = []
-            for entity_entry in entity_registry.entities.values():
-                if entity_entry.domain == "automation":
-                    entity_labels = set(entity_entry.labels)
-                    if any(label in entity_labels for label in labels):
-                        state = self.hass.states.get(entity_entry.entity_id)
-                        friendly_name = (
-                            state.attributes.get("friendly_name", entity_entry.entity_id)
-                            if state
-                            else entity_entry.entity_id
-                        )
-                        commands.append({
-                            "entity_id": entity_entry.entity_id,
-                            "command": entity_entry.entity_id.split(".", 1)[-1],
-                            "description": f"Déclenche l'automatisation '{friendly_name}'",
-                            "format": f"✅ Automatisation `{entity_entry.entity_id}` déclenchée.",
-                        })
-            return commands
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Failed to get automation commands: %s", err)
-            return []
+    async def _async_scan_commands(self, labels: list[str]) -> dict[str, Any]:
+        """Scan for automation and entity commands based on labels."""
+        entity_registry = er.async_get(self.hass)
+        
+        # Find automations
+        automation_commands = []
+        for entity_entry in entity_registry.entities.values():
+            if entity_entry.domain == "automation":
+                entity_labels = set(entity_entry.labels)
+                if any(label in entity_labels for label in labels):
+                    state = self.hass.states.get(entity_entry.entity_id)
+                    friendly_name = (
+                        state.attributes.get("friendly_name", entity_entry.entity_id)
+                        if state
+                        else entity_entry.entity_id
+                    )
+                    automation_commands.append({
+                        "entity_id": entity_entry.entity_id,
+                        "command": entity_entry.entity_id.split(".", 1)[-1],
+                        "description": f"Déclenche '{friendly_name}'",
+                        "format": f"✅ Automatisation `{entity_entry.entity_id}` déclenchée.",
+                        "type": "automation",
+                    })
+
+        # Find entities with matching labels (for entity commands)
+        entity_commands = []
+        for entity_entry in entity_registry.entities.values():
+            if entity_entry.domain != "automation":
+                entity_labels = set(entity_entry.labels)
+                if any(label in entity_labels for label in labels):
+                    entity_commands.append({
+                        "entity_id": entity_entry.entity_id,
+                        "command": entity_entry.entity_id.split(".", 1)[-1],
+                        "description": f"Affiche l'état de {entity_entry.name or entity_entry.entity_id}",
+                        "format": "{{ states(entity_id) }}",
+                        "type": "entity",
+                    })
+
+        return {
+            "automation_commands": automation_commands,
+            "entity_commands": entity_commands,
+            "automation_count": len(automation_commands),
+            "entity_count": len(entity_commands),
+            "total_count": len(automation_commands) + len(entity_commands),
+        }
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -122,23 +142,13 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if new_label not in labels:
                         labels.append(new_label)
 
-                # Fetch automation commands based on selected labels
-                automation_commands = await self._async_get_automation_commands(labels)
-
-                # One entry per bot token.
-                await self.async_set_unique_id(token)
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title="Discord Bot Manager",
-                    data={
-                        CONF_TOKEN: token,
-                        CONF_GUILD_ID: guild_id,
-                        CONF_LABELS: labels,
-                        CONF_AUTOMATION_LABELS: labels,
-                        CONF_ENTITIES: automation_commands,
-                    },
-                )
+                # Store for scan step
+                self._scan_token = token
+                self._scan_guild_id = guild_id
+                self._scan_labels = labels
+                
+                # Show scan results step
+                return await self.async_step_scan_commands()
 
         # Fetch available labels for the dropdown
         available_labels = await self._async_get_available_labels()
@@ -162,6 +172,69 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+    async def async_step_scan_commands(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle the scan commands step."""
+        labels = getattr(self, '_scan_labels', [])
+        
+        if not labels:
+            return self.async_abort(reason="no_labels")
+
+        # Scan for commands
+        scan_results = await self._async_scan_commands(labels)
+
+        if user_input is not None:
+            action = user_input.get("action")
+            
+            if action == "create":
+                # Create entry with discovered commands
+                token = getattr(self, '_scan_token', '')
+                guild_id = getattr(self, '_scan_guild_id', '')
+                
+                all_commands = scan_results["automation_commands"] + scan_results["entity_commands"]
+                
+                await self.async_set_unique_id(token)
+                self._abort_if_unique_id_configured()
+                
+                return self.async_create_entry(
+                    title="Discord Bot Manager",
+                    data={
+                        CONF_TOKEN: token,
+                        CONF_GUILD_ID: guild_id,
+                        CONF_LABELS: labels,
+                        CONF_AUTOMATION_LABELS: labels,
+                        CONF_ENTITIES: all_commands,
+                    },
+                )
+            elif action == "abort":
+                return self.async_abort(reason="user_abort")
+
+        # Prepare preview
+        preview_lines = []
+        for cmd in scan_results["automation_commands"][:5]:
+            preview_lines.append(f"- {cmd['command']}: {cmd['description']}")
+        for cmd in scan_results["entity_commands"][:5]:
+            preview_lines.append(f"- {cmd['command']}: {cmd['description']}")
+        preview = "\n".join(preview_lines) or "Aucune commande trouvée"
+
+        schema = vol.Schema(
+            {
+                vol.Required("action"): vol.In(["create", "abort"]),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="scan_commands",
+            data_schema=schema,
+            description_placeholders={
+                "automation_count": scan_results["automation_count"],
+                "entity_count": scan_results["entity_count"],
+                "total_count": scan_results["total_count"],
+                "commands_preview": preview,
+            },
+        )
+
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -172,7 +245,6 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         current_token = str(entry.data.get(CONF_TOKEN, "") or "")
         current_guild_id = str(entry.data.get(CONF_GUILD_ID, "") or "")
         current_labels = entry.data.get(CONF_LABELS, [])
-        current_entities = entry.data.get(CONF_ENTITIES, [])
 
         if user_input is not None:
             errors = self._validate(user_input)
@@ -190,8 +262,9 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if new_label not in labels:
                         labels.append(new_label)
 
-                # Re-fetch automation commands based on updated labels
-                automation_commands = await self._async_get_automation_commands(labels)
+                # Re-scan commands based on updated labels
+                scan_results = await self._async_scan_commands(labels)
+                all_commands = scan_results["automation_commands"] + scan_results["entity_commands"]
 
                 # Update entry data
                 updated_data = {
@@ -200,7 +273,7 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_GUILD_ID: guild_id,
                     CONF_LABELS: labels,
                     CONF_AUTOMATION_LABELS: labels,
-                    CONF_ENTITIES: automation_commands,
+                    CONF_ENTITIES: all_commands,
                 }
 
                 self.hass.config_entries.async_update_entry(
@@ -244,6 +317,12 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(token)
         self._abort_if_unique_id_configured()
 
+        labels = list(import_config.get(CONF_LABELS, []) or [])
+        
+        # Auto-scan for commands
+        scan_results = await self._async_scan_commands(labels)
+        all_commands = scan_results["automation_commands"] + scan_results["entity_commands"]
+
         return self.async_create_entry(
             title="Discord Bot (YAML)",
             data={
@@ -251,12 +330,8 @@ class DiscordBotManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_GUILD_ID: str(
                     import_config.get(CONF_GUILD_ID, "") or ""
                 ).strip(),
-                CONF_LABELS: list(import_config.get(CONF_LABELS, []) or []),
-                CONF_AUTOMATION_LABELS: list(
-                    import_config.get(CONF_AUTOMATION_LABELS)
-                    or import_config.get(CONF_LABELS)
-                    or []
-                ),
-                CONF_ENTITIES: list(import_config.get(CONF_ENTITIES, []) or []),
+                CONF_LABELS: labels,
+                CONF_AUTOMATION_LABELS: labels,
+                CONF_ENTITIES: all_commands,
             },
         )
