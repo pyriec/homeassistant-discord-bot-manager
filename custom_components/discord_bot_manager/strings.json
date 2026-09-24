@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Discord Bot Manager",
+        "description": "Connecte un bot Discord à Home Assistant. Les automatisations portant les étiquettes indiquées seront exposées en commandes slash. Les entités et templates se configurent en YAML (voir README).",
+        "data": {
+          "token": "Token du bot Discord",
+          "guild_id": "ID du serveur Discord (optionnel, sync instantanée)",
+          "labels": "Étiquettes d'automatisations (séparées par des virgules)"
+        }
+      }
+    },
+    "error": {
+      "missing_token": "Le token du bot est requis",
+      "invalid_guild_id": "L'ID du serveur doit être numérique"
+    },
+    "abort": {
+      "already_configured": "Ce bot est déjà configuré",
+      "missing_token": "Token manquant"
+    }
+  },
+  "services": {
+    "refresh_commands": {
+      "name": "Rafraîchir les commandes",
+      "description": "Re-synchronise l'arbre de commandes Discord.",
+      "fields": {
+        "entry_id": {
+          "name": "Entrée de configuration",
+          "description": "ID de l'entrée de configuration à resynchroniser (toutes si omis)."
+        }
+      }
+    },
+    "reconnect": {
+      "name": "Reconnecter",
+      "description": "Recharge l'intégration (déconnecte puis reconnecte le bot).",
+      "fields": {
+        "entry_id": {
+          "name": "Entrée de configuration",
+          "description": "ID de l'entrée de configuration à recharger (toutes si omis)."
+        }
+      }
+    }
+  }
+}
