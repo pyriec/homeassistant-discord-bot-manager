@@ -3,21 +3,40 @@
     "step": {
       "user": {
         "title": "Discord Bot Manager",
-        "description": "Connecte un bot Discord à Home Assistant. Les automatisations portant les étiquettes indiquées seront exposées en commandes slash. Les entités et templates se configurent en YAML (voir README).",
+        "description": "Connecte un bot Discord à Home Assistant. Les automatisations portant les étiquettes indiquées seront exposées en commandes slash.",
         "data": {
           "token": "Token du bot Discord",
           "guild_id": "ID du serveur Discord (optionnel, sync instantanée)",
-          "labels": "Étiquettes d'automatisations (séparées par des virgules)"
+          "labels": "Étiquettes d'automatisations (séparées par des virgules)",
+          "_new_label": "Créer une nouvelle étiquette (optionnel)"
+        },
+        "data_description": {
+          "token": "Votre token bot Discord (à récupérer sur https://discord.com/developers/applications)",
+          "guild_id": "ID numérique du serveur Discord pour synchronisation instantanée",
+          "labels": "Étiquettes HA existantes (sélectionnez ou créez-en une nouvelle)",
+          "_new_label": "Nom de la nouvelle étiquette à créer"
+        }
+      },
+      "reconfigure": {
+        "title": "Modifier le bot Discord",
+        "description": "Modifiez la configuration du bot. Les changements rechargeront automatiquement le bot.",
+        "data": {
+          "token": "Token du bot Discord",
+          "guild_id": "ID du serveur Discord",
+          "labels": "Étiquettes d'automatisations",
+          "_new_label": "Créer une nouvelle étiquette (optionnel)"
         }
       }
     },
     "error": {
       "missing_token": "Le token du bot est requis",
-      "invalid_guild_id": "L'ID du serveur doit être numérique"
+      "invalid_guild_id": "L'ID du serveur doit être numérique",
+      "already_configured": "Ce bot est déjà configuré"
     },
     "abort": {
       "already_configured": "Ce bot est déjà configuré",
-      "missing_token": "Token manquant"
+      "missing_token": "Token manquant",
+      "reconfigured": "Configuration mise à jour avec succès."
     }
   },
   "services": {
