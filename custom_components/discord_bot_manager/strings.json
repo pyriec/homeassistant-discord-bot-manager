@@ -3,18 +3,18 @@
     "step": {
       "user": {
         "title": "Discord Bot Manager",
-        "description": "Connecte un bot Discord à Home Assistant. Les automatisations portant les étiquettes indiquées seront exposées en commandes slash.",
+        "description": "Connecte un bot Discord à Home Assistant.\n\nLes automatisations portant les étiquettes sélectionnées seront exposées en commandes slash sur Discord.\n\nConsultez la [documentation](https://git.home-deneuville.fr/Edern/homeassistant-discord-bot-manager) pour plus d'informations.",
         "data": {
           "token": "Token du bot Discord",
-          "guild_id": "ID du serveur Discord (optionnel, sync instantanée)",
-          "labels": "Étiquettes d'automatisations (séparées par des virgules)",
-          "_new_label": "Créer une nouvelle étiquette (optionnel)"
+          "guild_id": "ID du serveur Discord (optionnel)",
+          "labels": "Étiquettes à utiliser",
+          "_new_label": "Créer une nouvelle étiquette"
         },
         "data_description": {
-          "token": "Votre token bot Discord (à récupérer sur https://discord.com/developers/applications)",
-          "guild_id": "ID numérique du serveur Discord pour synchronisation instantanée",
-          "labels": "Étiquettes HA existantes (sélectionnez ou créez-en une nouvelle)",
-          "_new_label": "Nom de la nouvelle étiquette à créer"
+          "token": "Token obtenu sur https://discord.com/developers/applications",
+          "guild_id": "ID numérique du serveur pour synchronisation instantanée des commandes slash",
+          "labels": "Étiquettes HA existantes (séparées par des virgules) : {{ available_labels }}",
+          "_new_label": "Nom de la nouvelle étiquette à créer dans Home Assistant"
         }
       },
       "reconfigure": {
@@ -23,8 +23,8 @@
         "data": {
           "token": "Token du bot Discord",
           "guild_id": "ID du serveur Discord",
-          "labels": "Étiquettes d'automatisations",
-          "_new_label": "Créer une nouvelle étiquette (optionnel)"
+          "labels": "Étiquettes à utiliser",
+          "_new_label": "Créer une nouvelle étiquette"
         }
       }
     },
@@ -36,7 +36,7 @@
     "abort": {
       "already_configured": "Ce bot est déjà configuré",
       "missing_token": "Token manquant",
-      "reconfigured": "Configuration mise à jour avec succès."
+      "reconfigured": "Configuration mise à jour avec succès. Le bot a été rechargé."
     }
   },
   "services": {

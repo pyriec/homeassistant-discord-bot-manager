@@ -4,6 +4,7 @@ Runs one or more persistent Discord bots, exposing:
 
 - Home Assistant automations (matched by HA labels) as Discord slash commands.
 - Configured entity states as slash commands with Jinja2 template rendering.
+- Dashboard sensor showing bot status and configured commands.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = []
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 ENTITY_COMMAND_SCHEMA = vol.Schema(
     {
@@ -276,16 +277,6 @@ class HADiscordBotManager:
             if wanted & set(entity_entry.labels):
                 automation_ids.add(entity_entry.entity_id)
 
-        for label in labels:
-            if not any(
-                label in entry.labels
-                for entry in entity_registry.entities.values()
-                if entry.domain == "automation"
-            ):
-                _LOGGER.warning(
-                    "Aucune automatisation trouvée avec l'étiquette '%s'", label
-                )
-
         return sorted(automation_ids)
 
     async def _async_trigger_automation(
@@ -400,6 +391,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = manager
     await manager.async_start()
 
+    # Load the sensor platform for dashboard
+    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
+
     return True
 
 
@@ -410,4 +404,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     if manager:
         await manager.async_stop()
+    
+    # Unload sensor platform
+    await hass.config_entries.async_forward_entry_unload(entry, Platform.SENSOR)
+    
     return True
