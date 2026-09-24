@@ -31,7 +31,7 @@ from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.DASHBOARD]
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 REGEX_COMMAND = re.compile(COMMAND_NAME_REGEX)
 
@@ -358,8 +358,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Failed to connect bot: %s", err)
         raise ConfigEntryNotReady(f"Failed to connect: {err}")
 
-    # Forward to sensor and dashboard platforms
-    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR, Platform.DASHBOARD])
+    # Forward to sensor platform
+    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
 
     return True
 
@@ -373,7 +373,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await manager.async_stop()
 
     # Unload platforms
-    unload_ok = await hass.config_entries.async_forward_entry_unload(entry, Platform.SENSOR)
-    unload_ok &= await hass.config_entries.async_forward_entry_unload(entry, Platform.DASHBOARD)
-
-    return unload_ok
+    return await hass.config_entries.async_forward_entry_unload(entry, Platform.SENSOR)
